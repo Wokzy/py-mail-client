@@ -10,3 +10,5 @@ USE_SSL = True
 LOGIN = ''
 PASSWORD = ''
 INBOX_FOLDER = 'INBOX' # Folder, where mail would be taken from to read
+INGNORE_ALREADY_RECIEVED_MESSAGES = True
+MESSAGE_CHECK_COOLDOWN = 1 # seconds

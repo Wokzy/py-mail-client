@@ -6,36 +6,20 @@ Client is thread
 Tested on greenmail/stanalone
 """
 
-import ssl
+import time
 import email
+import queue
 import smtplib
 import imaplib
 import threading
 
-from config import SERVER_DOMAIN, SMTP_PORT, IMAP_PORT, \
-					USE_SSL, LOGIN, PASSWORD, INBOX_FOLDER
+from config import SERVER_DOMAIN, SMTP_PORT, IMAP_PORT, MESSAGE_CHECK_COOLDOWN, \
+					USE_SSL, LOGIN, PASSWORD, INBOX_FOLDER, INGNORE_ALREADY_RECIEVED_MESSAGES
 
 
 __author__ = 'Yegor Yershov'
 
-'''
-class Message:
-	def __init__(self, sender:str=None, reciever:str=None, content=None, date=None):
-		"""
-		Init settings
-		"""
-		self.sender = sender
-		self.reciever = reciever
-		self.content = content
-		self.date = date
 
-
-	def setup_from_fetch_responce(self, responce:tuple):
-		"""
-		Init settings from fetch responce
-		"""
-		pass
-'''
 
 class MailClient(threading.Thread):
 	def __init__(self, logging=False):
@@ -45,7 +29,14 @@ class MailClient(threading.Thread):
 		super().__init__(daemon=True)
 
 		self.logging = logging
-		self.recieved_messages = []
+		self.new_emails_queue = queue.Queue()
+
+		self.login = LOGIN
+		self.password = PASSWORD
+		self.use_ssl = USE_SSL
+
+		self.inbox = [[], self.load_inbox()][INGNORE_ALREADY_RECIEVED_MESSAGES]
+		self.catch = True
 
 
 	def smtp_authorize(self):
@@ -53,7 +44,7 @@ class MailClient(threading.Thread):
 		SMTP authorization to server
 		"""
 
-		if USE_SSL:
+		if self.use_ssl:
 			smtp = smtplib.SMTP_SSL(SERVER_DOMAIN, SMTP_PORT)
 		else:
 			smtp = smtplib.SMTP(SERVER_DOMAIN, SMTP_PORT)
@@ -64,7 +55,7 @@ class MailClient(threading.Thread):
 
 		#self.log(f'status: {status}')
 
-		status = smtp.login(LOGIN, PASSWORD)
+		status = smtp.login(self.login, self.password)
 		if status[0] != 235: # 235 means login is successfull
 			raise RuntimeError(f'Server login failed: {status[1]}')
 
@@ -77,12 +68,12 @@ class MailClient(threading.Thread):
 		IMAP authorization to server
 		"""
 
-		if USE_SSL:
+		if self.use_ssl:
 			imap = imaplib.IMAP4_SSL(host=SERVER_DOMAIN, port=IMAP_PORT)
 		else:
 			imap = imaplib.IMAP4(host=SERVER_DOMAIN, port=IMAP_PORT)
 
-		status = imap.login(LOGIN, PASSWORD)
+		status = imap.login(self.login, self.password)
 		if status[0] != 'OK':
 			raise RuntimeError(f'Server login failed: {status[1]}')
 
@@ -109,7 +100,8 @@ class MailClient(threading.Thread):
 	def load_inbox(self):
 		"""
 		Returns list, containing "email.message.Message" structures fromed of messages from INBOX
-		email.message.Message.items() - return all message add. info (subject, date) (use get_payload() to get payload)
+		email.message.Message.items() - return all message add. info (subject, date)
+												(use get_payload() to get payload)
 		"""
 
 		imap = self.imap_authorize()
@@ -127,18 +119,44 @@ class MailClient(threading.Thread):
 		return messages
 
 
+	def find_new_messages(self, first:list, second:list):
+		"""
+		Iterates by lists of emails, comparing payloads and items
+		"""
+
+		new = []
+
+		for mail in first:
+			flag = True
+			for mail2 in second:
+				if mail.get_payload() == mail2.get_payload() and mail.items() == mail2.items():
+					flag = False
+					break
+
+			if flag:
+				new.append(mail)
+
+		return new
+
+
 	def run(self):
 		"""
-		Thread function
+		Main thread function, updating inbox
 		"""
 		self.smtp_authorize()
-		#self.send_message(reciever=input('Enter reciever -> '), message=input('Enter message -> '))
-		inbox = self.load_inbox()
-		for msg in inbox:
-			print(f'"""{msg.get_payload()}"""', msg.items(), end='\n\n')
+
+		while self.catch:
+			inbox = self.load_inbox()
+			for mail in self.find_new_messages(inbox, self.inbox):
+				self.new_emails_queue.put(mail)
+				self.log('New message!')
+
+			self.inbox = inbox
+
+			time.sleep(MESSAGE_CHECK_COOLDOWN)
 
 
 if __name__ == '__main__':
-	main_thread = MailClient(logging=True)
+	main_thread = MailClient(logging=True) # console logging on
 	main_thread.start()
 	main_thread.join()
